@@ -254,26 +254,6 @@ class EverGetChandelierExit(IStrategy):
         dataframe['sma50'] = ta.SMA(dataframe, timeperiod=50)
         # dataframe['sma100'] = ta.SMA(dataframe, timeperiod=100)
 
-        # Heiken Ashi
-        heikinashi = qtpylib.heikinashi(dataframe)
-        dataframe['ha_open'] = heikinashi['open']
-        dataframe['ha_close'] = heikinashi['close']
-        dataframe['ha_high'] = heikinashi['high']
-        dataframe['ha_low'] = heikinashi['low']
-
-        ######
-    
-
-        # ------------------------------------
-        """
-        # first check if dataprovider is available
-        if self.dp:
-            if self.dp.runmode.value in ('live', 'dry_run'):
-                ob = self.dp.orderbook(metadata['pair'], 1)
-                dataframe['best_bid'] = ob['bids'][0][0]
-                dataframe['best_ask'] = ob['asks'][0][0]
-        """
-
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
