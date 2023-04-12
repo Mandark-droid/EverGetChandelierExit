@@ -88,19 +88,6 @@ class EverGetChandelierExit(IStrategy):
     highlightState = True
 
     ######
-    # Strategy parameters
-    bb_length = 20
-    bb_mult = 2.0
-    kc_length = 20
-    kc_mult = 1.5
-    use_true_range = True
-    momentum_length = 20
-
-    # Buy signal parameters
-    buy_momentum_threshold = 0.0
-
-    # Sell signal parameters
-    sell_momentum_threshold = 0.0
     ######
 
     # Optional order type mapping.
@@ -275,38 +262,7 @@ class EverGetChandelierExit(IStrategy):
         dataframe['ha_low'] = heikinashi['low']
 
         ######
-        source = dataframe['close']
-        bb_basis = ta.SMA(source, timeperiod=self.bb_length)
-        bb_dev = self.bb_mult * ta.STDDEV(source, timeperiod=self.bb_length)
-        bb_upper = bb_basis + bb_dev
-        bb_lower = bb_basis - bb_dev
-
-        # Calculate Keltner Channels
-        kc_ma = ta.SMA(source, timeperiod=self.kc_length)
-        kc_range = dataframe['tr'] if self.use_true_range else (dataframe['high'] - dataframe['low'])
-        kc_rangema = ta.SMA(kc_range, timeperiod=self.kc_length)
-        kc_upper = kc_ma + kc_rangema * self.kc_mult
-        kc_lower = kc_ma - kc_rangema * self.kc_mult
-
-        # Identify squeezes
-        sqz_on = (bb_lower > kc_lower) & (bb_upper < kc_upper)
-        sqz_off = (bb_lower < kc_lower) & (bb_upper > kc_upper)
-        no_sqz = ~(sqz_on | sqz_off)
-
-        # Calculate Squeeze Momentum Indicator
-        sqz_mom = ta.LINEARREG(source - ta.AVGPRICE(dataframe, timeperiod=self.kc_length),
-                               timeperiod=self.momentum_length)
-
-        # Add indicators to dataframe
-        dataframe['bb_upper'] = bb_upper
-        dataframe['bb_lower'] = bb_lower
-        dataframe['kc_upper'] = kc_upper
-        dataframe['kc_lower'] = kc_lower
-        dataframe['sqz_on'] = sqz_on
-        dataframe['sqz_off'] = sqz_off
-        dataframe['no_sqz'] = no_sqz
-        dataframe['sqz_mom'] = sqz_mom
-        ######
+    
 
         # ------------------------------------
         """
@@ -334,9 +290,6 @@ class EverGetChandelierExit(IStrategy):
             (dataframe['rsi_25'] > 30) & (dataframe['close'] > dataframe['bb_middleband']) & (dataframe['rsi_25'] < 70)
             & (dataframe['close'] > dataframe['sma30'])
             & (dataframe['close'] > dataframe['ema30'])
-            #& (dataframe['sqz_on']) &
-            #(dataframe['sqz_mom'] > self.buy_momentum_threshold) &
-            #(dataframe['sqz_mom'] > dataframe['sqz_mom'].shift(1))
             ,
             'buy'
         ] = 1
@@ -362,10 +315,6 @@ class EverGetChandelierExit(IStrategy):
         dataframe.loc[
             (dataframe['dir'] == -1) &
             (dataframe['dir'].shift(1) == 1)
-            #& (dataframe['sqz_off']) |
-            #((dataframe['sqz_on']) &
-            # (dataframe['sqz_mom'] < self.sell_momentum_threshold) &
-            # (dataframe['sqz_mom'] < dataframe['sqz_mom'].shift(1)))
                 # &(dataframe['close'] < dataframe['bb_middleband']) &
                 # & (dataframe['rsi_25'] > 60)
 
