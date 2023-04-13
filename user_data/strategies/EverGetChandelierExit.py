@@ -268,8 +268,8 @@ class EverGetChandelierExit(IStrategy):
                     dataframe['dir'] == 1) &
             (dataframe['dir'].shift(1) == -1) &
             (dataframe['rsi_25'] > 30) & (dataframe['close'] > dataframe['bb_middleband']) & (dataframe['rsi_25'] < 70)
-            & (dataframe['close'] > dataframe['sma3'])
-            & (dataframe['close'] > dataframe['ema3'])
+            & (dataframe['close'] > dataframe['sma21'])
+            & (dataframe['close'] > dataframe['ema21'])
             ,
             'buy'
         ] = 1
