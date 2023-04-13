@@ -246,8 +246,8 @@ class EverGetChandelierExit(IStrategy):
         dataframe['ema200'] = ta.EMA(dataframe, timeperiod=200)
 
         # # SMA - Simple Moving Average
-        # dataframe['sma3'] = ta.SMA(dataframe, timeperiod=3)
-        # dataframe['sma5'] = ta.SMA(dataframe, timeperiod=5)
+        dataframe['sma3'] = ta.SMA(dataframe, timeperiod=3)
+        dataframe['sma5'] = ta.SMA(dataframe, timeperiod=5)
         # # dataframe['sma10'] = ta.SMA(dataframe, timeperiod=10)
         dataframe['sma21'] = ta.SMA(dataframe, timeperiod=21)
         dataframe['sma30'] = ta.SMA(dataframe, timeperiod=30)
@@ -268,8 +268,8 @@ class EverGetChandelierExit(IStrategy):
                     dataframe['dir'] == 1) &
             (dataframe['dir'].shift(1) == -1) &
             (dataframe['rsi_25'] > 30) & (dataframe['close'] > dataframe['bb_middleband']) & (dataframe['rsi_25'] < 70)
-            & (dataframe['close'] > dataframe['sma21'])
-            & (dataframe['close'] > dataframe['ema21'])
+            & (dataframe['close'] > dataframe['sma3'])
+            & (dataframe['close'] > dataframe['ema3'])
             ,
             'buy'
         ] = 1
