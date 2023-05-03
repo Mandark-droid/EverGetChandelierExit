@@ -209,8 +209,8 @@ class EverGetChandelierExit(IStrategy):
     }
 
     # Optimal timeframe for the strategy.
-    timeframe = '5m'
-    informative_timeframe = '1h'
+    timeframe = '1h'
+    informative_timeframe = '1d'
     # Can this strategy go short?
     can_short: bool = False
 
