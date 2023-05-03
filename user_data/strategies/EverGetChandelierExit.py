@@ -8,10 +8,8 @@ import pandas as pd
 from pandas import DataFrame
 from datetime import datetime
 from typing import Optional, Union
-
 #from freqtrade.strategy import (BooleanParameter, CategoricalParameter, DecimalParameter,
 #                                IntParameter, IStrategy, merge_informative_pair)
-
 from freqtrade.strategy import IStrategy,merge_informative_pair
 from sqlalchemy.ext.declarative import declarative_base
 # --------------------------------
@@ -19,7 +17,41 @@ from sqlalchemy.ext.declarative import declarative_base
 import talib.abstract as ta
 import pandas_ta as pta
 from technical import qtpylib
+import sys
+import talib.abstract as ta
+import numpy as np
+import freqtrade.vendor.qtpylib.indicators as qtpylib
+import datetime
+from technical.util import resample_to_interval, resampled_merge
+from datetime import datetime, timedelta
+from freqtrade.persistence import Trade
+from freqtrade.strategy import stoploss_from_open, merge_informative_pair, DecimalParameter, IntParameter, \
+    CategoricalParameter
+import technical.indicators as ftt
+import math
+import logging
+from functools import reduce
 
+
+
+
+def EWO(dataframe, ema_length=5, ema2_length=35):
+    # df = dataframe.copy()
+    ema1 = ta.EMA(dataframe, timeperiod=ema_length)
+    ema2 = ta.EMA(dataframe, timeperiod=ema2_length)
+    emadif = (ema1 - ema2) / dataframe['close'] * 100
+    return emadif
+
+
+def lerp(a: float, b: float, t: float) -> float:
+    """Linear interpolate on the scale given by a to b, using t as the point on that scale.
+    Examples
+    --------
+        50 == lerp(0, 100, 0.5)
+        4.2 == lerp(1, 5, 0.8)
+    """
+    return (1 - t) * a + t * b
+logger = logging.getLogger(__name__)
 
 class EverGetChandelierExit(IStrategy):
     """
@@ -42,9 +74,143 @@ class EverGetChandelierExit(IStrategy):
     # Check the documentation or the Sample strategy to get the latest version.
     INTERFACE_VERSION = 3
 
-    # Optimal timeframe for the strategy.
-    timeframe = '1h'
 
+    overbuy_factor = 1.295
+
+    position_adjustment_enable = True
+    initial_safety_order_trigger = -0.02
+    max_so_multiplier_orig = 3
+    safety_order_step_scale = 2
+    safety_order_volume_scale = 1.8
+
+    # just for initialization, now we calculate it...
+    max_so_multiplier = max_so_multiplier_orig
+    # We will store the size of stake of each trade's first order here
+    cust_proposed_initial_stakes = {}
+    # Amount the strategy should compensate previously partially filled orders for successive safety orders (0.0 - 1.0)
+    partial_fill_compensation_scale = 1
+
+    def custom_exit(self, pair: str, trade: 'Trade', current_time: 'datetime', current_rate: float,
+                    current_profit: float, **kwargs):
+
+        tag = super().custom_sell(pair, trade, current_time, current_rate, current_profit, **kwargs)
+        if tag:
+            return tag
+
+        buy_tag = 'empty'
+        if hasattr(trade, 'buy_tag') and trade.buy_tag is not None:
+            buy_tag = trade.buy_tag
+        buy_tags = buy_tag.split()
+
+        if current_profit <= -0.35:
+            return f'stop_loss ({buy_tag})'
+
+        return None
+
+    def confirm_trade_exit(self, pair: str, trade: Trade, order_type: str, amount: float,
+                           rate: float, time_in_force: str, exit_reason: str,
+                           current_time: datetime, **kwargs) -> bool:
+        # remove pair from custom initial stake dict only if full exit
+        if trade.amount == amount:
+            del self.cust_proposed_initial_stakes[pair]
+        return True
+
+        # Let unlimited stakes leave funds open for DCA orders
+
+    def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
+                            proposed_stake: float, min_stake: float, max_stake: float,
+                            **kwargs) -> float:
+        custom_stake = proposed_stake / self.max_so_multiplier * self.overbuy_factor
+        self.cust_proposed_initial_stakes[
+            pair] = custom_stake  # Setting of first stake size just before each first order of a trade
+        return custom_stake  # set to static 10 to simulate partial fills of 10$, etc
+
+    def adjust_trade_position(self, trade: Trade, current_time: datetime,
+                              current_rate: float, current_profit: float, min_stake: float,
+                              max_stake: float, **kwargs) -> Optional[float]:
+        if current_profit > self.initial_safety_order_trigger:
+            return None
+
+        filled_buys = trade.select_filled_orders('buy')
+        count_of_buys = len(filled_buys)
+
+        if 1 <= count_of_buys <= self.max_so_multiplier_orig:
+            # if (1 <= count_of_buys) and (open_trade_value < self.stake_amount * self.overbuy_factor):
+            safety_order_trigger = (abs(self.initial_safety_order_trigger) * count_of_buys)
+            if self.safety_order_step_scale > 1:
+                safety_order_trigger = abs(self.initial_safety_order_trigger) + (
+                        abs(self.initial_safety_order_trigger) * self.safety_order_step_scale * (
+                        math.pow(self.safety_order_step_scale, (count_of_buys - 1)) - 1) / (
+                                self.safety_order_step_scale - 1))
+            elif self.safety_order_step_scale < 1:
+                safety_order_trigger = abs(self.initial_safety_order_trigger) + (
+                        abs(self.initial_safety_order_trigger) * self.safety_order_step_scale * (
+                        1 - math.pow(self.safety_order_step_scale, (count_of_buys - 1))) / (
+                                1 - self.safety_order_step_scale))
+
+            if current_profit <= (-1 * abs(safety_order_trigger)):
+                try:
+                    # This returns first order actual stake size
+                    actual_initial_stake = filled_buys[0].cost
+
+                    # Fallback for when the initial stake was not set for whatever reason
+                    stake_amount = actual_initial_stake
+
+                    already_bought = sum(filled_buy.cost for filled_buy in filled_buys)
+
+                    if self.cust_proposed_initial_stakes[trade.pair] > 0:
+                        # This calculates the amount of stake that will get used for the current safety order,
+                        # including compensation for any partial buys
+                        proposed_initial_stake = self.cust_proposed_initial_stakes[trade.pair]
+                        current_actual_stake = already_bought * math.pow(self.safety_order_volume_scale,
+                                                                         (count_of_buys - 1))
+                        current_stake_preposition = proposed_initial_stake * math.pow(self.safety_order_volume_scale,
+                                                                                      (count_of_buys - 1))
+                        current_stake_preposition_compensation = current_stake_preposition + abs(
+                            current_stake_preposition - current_actual_stake)
+                        total_so_stake = lerp(current_actual_stake, current_stake_preposition_compensation,
+                                              self.partial_fill_compensation_scale)
+                        # Set the calculated stake amount
+                        stake_amount = total_so_stake
+                    else:
+                        # Fallback stake amount calculation
+                        stake_amount = stake_amount * math.pow(self.safety_order_volume_scale, (count_of_buys - 1))
+
+                    amount = stake_amount / current_rate
+                    logger.info(
+                        f"Initiating safety order buy #{count_of_buys} "
+                        f"for {trade.pair} with stake amount of {stake_amount}. "
+                        f"which equals {amount}. "
+                        f"Previously bought: {already_bought}. "
+                        f"Now overall:{already_bought + stake_amount}. ")
+                    return stake_amount
+                except Exception as exception:
+                    logger.info(f'Error occured while trying to get stake amount for {trade.pair}: {str(exception)}')
+                    # print(f'Error occured while trying to get stake amount for {trade.pair}: {str(exception)}')
+                    return None
+
+        return None
+
+        # Modified Buy / Sell params - 20210619
+        # Buy hyperspace params:
+
+    buy_params = {
+        "base_nb_candles_buy": 16,
+        "ewo_high": 5.672,
+        "ewo_low": -19.931,
+        "low_offset": 0.973,
+        "rsi_buy": 59,
+    }
+
+    # Sell hyperspace params:
+    sell_params = {
+        "base_nb_candles_sell": 20,
+        "high_offset": 1.010,
+    }
+
+    # Optimal timeframe for the strategy.
+    timeframe = '5m'
+    informative_timeframe = '1h'
     # Can this strategy go short?
     can_short: bool = False
 
@@ -58,27 +224,43 @@ class EverGetChandelierExit(IStrategy):
         "240": 0.01,
         "300": 0.008
     }
+    # SMAOffset
+    base_nb_candles_buy = IntParameter(
+        5, 80, default=buy_params['base_nb_candles_buy'], space='buy', optimize=True)
+    base_nb_candles_sell = IntParameter(
+        5, 80, default=sell_params['base_nb_candles_sell'], space='sell', optimize=True)
+    low_offset = DecimalParameter(
+        0.9, 0.99, default=buy_params['low_offset'], space='buy', optimize=True)
+    high_offset = DecimalParameter(
+        0.99, 1.1, default=sell_params['high_offset'], space='sell', optimize=True)
+
+    # Protection
+    fast_ewo = 50
+    slow_ewo = 200
+    ewo_low = DecimalParameter(-20.0, -8.0,
+                               default=buy_params['ewo_low'], space='buy', optimize=True)
+    ewo_high = DecimalParameter(
+        2.0, 12.0, default=buy_params['ewo_high'], space='buy', optimize=True)
+    rsi_buy = IntParameter(30, 70, default=buy_params['rsi_buy'], space='buy', optimize=True)
 
     # Optimal stoploss designed for the strategy.
     # This attribute will be overridden if the config file contains "stoploss".
     stoploss = -0.99
+    use_custom_stoploss = False
 
-    # Trailing stoploss
-    trailing_stop = True
-    trailing_only_offset_is_reached = False
-    trailing_stop_positive = 0.002
-    trailing_stop_positive_offset = 0.05  # Disabled / not configured
+    # Trailing stop:
+    trailing_stop = False
+    trailing_stop_positive = 0.001
+    trailing_stop_positive_offset = 0.01
+    trailing_only_offset_is_reached = True
 
-    # Run "populate_indicators()" only for new candle.
-    process_only_new_candles = False
-
-    # These values can be overridden in the config.
+    # Sell signal
     use_exit_signal = True
-    exit_profit_only = True
-    ignore_roi_if_entry_signal = True
-
-    # Number of candles the strategy requires before producing valid signals
-    startup_candle_count: int = 100
+    exit_profit_only = False
+    exit_profit_offset = 0.01
+    ignore_roi_if_entry_signal = False
+    process_only_new_candles = True
+    startup_candle_count: int = 576
 
     # Strategy parameters
     atr_period = 22
@@ -107,21 +289,42 @@ class EverGetChandelierExit(IStrategy):
     @property
     def plot_config(self):
         return {
-            # Main plot indicators (Moving averages, ...)
-            'main_plot': {
-                'tema': {},
-                'sar': {'color': 'white'},
-            },
-            'subplots': {
-                # Subplots - each dict defines one additional plot
-                "MACD": {
-                    'macd': {'color': 'blue'},
-                    'macdsignal': {'color': 'orange'},
-                },
-                "RSI": {
-                    'rsi': {'color': 'red'},
+            "main_plot":
+                {},
+            "subplots":
+                {
+                    "sub":
+                        {
+                            "rsi":
+                                {
+                                    "color": "#80dea8",
+                                    "type": "line"
+                                }
+                        },
+                    "sub2":
+                        {
+                            "ma_buy_16":
+                                {
+                                    "color": "#db1ea2",
+                                    "type": "line"
+                                },
+                            "ma_sell_20":
+                                {
+                                    "color": "#645825",
+                                    "type": "line"
+                                },
+                            "EWO":
+                                {
+                                    "color": "#1e5964",
+                                    "type": "line"
+                                },
+                            "missing_data":
+                                {
+                                    "color": "#26b08d",
+                                    "type": "line"
+                                }
+                        }
                 }
-            }
         }
 
     def informative_pairs(self):
@@ -135,6 +338,16 @@ class EverGetChandelierExit(IStrategy):
                             ("BTC/USDT", "15m"),
                             ]
         """
+        pairs = self.dp.current_whitelist()
+        informative_pairs = [(pair, self.informative_timeframe) for pair in pairs]
+
+        return informative_pairs
+
+    def get_informative_indicators(self, metadata: dict):
+
+        dataframe = self.dp.get_pair_dataframe(
+            pair=metadata['pair'], timeframe=self.informative_timeframe)
+
         return []
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -148,6 +361,25 @@ class EverGetChandelierExit(IStrategy):
         :param metadata: Additional information, like the currently traded pair
         :return: a Dataframe with all mandatory indicators for the strategies
         """
+        """
+        for val in self.base_nb_candles_buy.range:
+            dataframe[f'ma_buy_{val}'] = ta.EMA(dataframe, timeperiod=val)
+
+        # Calculate all ma_sell values
+        for val in self.base_nb_candles_sell.range:
+            dataframe[f'ma_sell_{val}'] = ta.EMA(dataframe, timeperiod=val)
+        """
+        # Elliot
+        dataframe['EWO'] = EWO(dataframe, self.fast_ewo, self.slow_ewo)
+
+        # RSI
+        dataframe['rsi'] = ta.RSI(dataframe, timeperiod=14)
+
+        # Check for 0 volume candles in the last day
+        dataframe['missing_data'] = \
+            (dataframe['volume'] <= 0).rolling(
+                window=self.startup_candle_count,
+                min_periods=self.startup_candle_count).sum()
 
         # Momentum Indicators
         # ------------------------------------
@@ -263,16 +495,36 @@ class EverGetChandelierExit(IStrategy):
         :param metadata: Additional information, like the currently traded pair
         :return: DataFrame with entry columns populated
         """
-        dataframe.loc[
-            (
-                    dataframe['dir'] == 1) &
+
+        dataframe[f'ma_buy_{self.base_nb_candles_buy.value}'] = \
+            ta.EMA(dataframe, timeperiod=self.base_nb_candles_buy.value)
+
+        conditions = []
+        conditions.append(
+            (dataframe['close'] < (
+                    dataframe[f'ma_buy_{self.base_nb_candles_buy.value}'] * self.low_offset.value)) &
+            (dataframe['EWO'] > self.ewo_high.value) &
+            (dataframe['rsi'] < self.rsi_buy.value) &
+            (dataframe['missing_data'] < 1)
+        )
+        conditions.append(
+            (dataframe['close'] < (
+                    dataframe[f'ma_buy_{self.base_nb_candles_buy.value}'] * self.low_offset.value)) &
+            (dataframe['EWO'] < self.ewo_low.value) &
+            (dataframe['missing_data'] < 1)
+        )
+        conditions.append(    (dataframe['dir'] == 1) &
             (dataframe['dir'].shift(1) == -1) &
             (dataframe['rsi_25'] > 30) & (dataframe['close'] > dataframe['bb_middleband']) & (dataframe['rsi_25'] < 70)
             & (dataframe['close'] > dataframe['sma21'])
-            & (dataframe['close'] > dataframe['ema21'])
-            ,
-            'buy'
-        ] = 1
+            & (dataframe['close'] > dataframe['ema21']))
+        if conditions:
+            dataframe.loc[
+                reduce(lambda x, y: x | y, conditions),
+                'buy'
+            ] = 1
+
+
         # Uncomment to use shorts (Only used in futures/margin mode. Check the documentation for more info)
         """
         dataframe.loc[
@@ -292,15 +544,33 @@ class EverGetChandelierExit(IStrategy):
         :param metadata: Additional information, like the currently traded pair
         :return: DataFrame with exit columns populated
         """
-        dataframe.loc[
-            (dataframe['dir'] == -1) &
-            (dataframe['dir'].shift(1) == 1)
-                # &(dataframe['close'] < dataframe['bb_middleband']) &
-                # & (dataframe['rsi_25'] > 60)
 
-            ,
-            'sell'
-        ] = 1
+
+
+
+
+        # Speed optimization for dry / live runs, not looping through for ... values with it, nothing else.
+        dataframe[f'ma_sell_{self.base_nb_candles_sell.value}'] = \
+            ta.EMA(dataframe, timeperiod=self.base_nb_candles_sell.value)
+
+        conditions = []
+
+        conditions.append(
+            (
+                    (dataframe['close'] > (
+                            dataframe[f'ma_sell_{self.base_nb_candles_sell.value}'] * self.high_offset.value)) &
+                    (dataframe['volume'] > 0)
+            )
+        )
+
+        conditions.append((dataframe['dir'] == -1) & (dataframe['dir'].shift(1) == 1))
+
+        if conditions:
+            dataframe.loc[
+                reduce(lambda x, y: x | y, conditions),
+                'sell'
+            ] = 1
+
         # Uncomment to use shorts (Only used in futures/margin mode. Check the documentation for more info)
         """
         dataframe.loc[
