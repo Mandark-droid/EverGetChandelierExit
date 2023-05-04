@@ -216,14 +216,13 @@ class EverGetChandelierExit(IStrategy):
 
     # Minimal ROI designed for the strategy.
     # This attribute will be overridden if the config file contains "minimal_roi".
-    minimal_roi = {
-        "0": 100.0,
-        "60": 0.12,
-        "120": 0.07,
-        "180": 0.03,
-        "240": 0.01,
-        "300": 0.008
+       minimal_roi = {
+        "0": 0.028,
+        "100": 0.018,
+        "300": 0.010,
+        "400": 0.005
     }
+        
     # SMAOffset
     base_nb_candles_buy = IntParameter(
         5, 80, default=buy_params['base_nb_candles_buy'], space='buy', optimize=True)
