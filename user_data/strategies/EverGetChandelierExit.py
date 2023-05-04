@@ -216,7 +216,7 @@ class EverGetChandelierExit(IStrategy):
 
     # Minimal ROI designed for the strategy.
     # This attribute will be overridden if the config file contains "minimal_roi".
-       minimal_roi = {
+    minimal_roi = {
         "0": 0.028,
         "100": 0.018,
         "300": 0.010,
