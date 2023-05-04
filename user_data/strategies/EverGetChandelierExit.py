@@ -222,7 +222,6 @@ class EverGetChandelierExit(IStrategy):
         "300": 0.010,
         "400": 0.005
     }
-        
     # SMAOffset
     base_nb_candles_buy = IntParameter(
         5, 80, default=buy_params['base_nb_candles_buy'], space='buy', optimize=True)
