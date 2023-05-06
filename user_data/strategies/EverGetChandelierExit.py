@@ -209,20 +209,21 @@ class EverGetChandelierExit(IStrategy):
     }
 
     # Optimal timeframe for the strategy.
-    timeframe = '1h'
-    informative_timeframe = '1d'
+    timeframe = '5m'
+    informative_timeframe = '1h'
     # Can this strategy go short?
     can_short: bool = False
 
     # Minimal ROI designed for the strategy.
     # This attribute will be overridden if the config file contains "minimal_roi".
-       minimal_roi = {
+    minimal_roi = {
         "0": 0.028,
-        "100": 0.018,
-        "300": 0.010,
-        "400": 0.005
+        "10": 0.018,
+        "30": 0.010,
+        "40": 0.005,
+        "50": 0.0025,
+        "60": 0.0015
     }
-        
     # SMAOffset
     base_nb_candles_buy = IntParameter(
         5, 80, default=buy_params['base_nb_candles_buy'], space='buy', optimize=True)
@@ -262,7 +263,7 @@ class EverGetChandelierExit(IStrategy):
     startup_candle_count: int = 576
 
     # Strategy parameters
-    atr_period = 22
+    atr_period = 10
     atr_multiplier = 3.0
     showLabels = True
     useClose = True
@@ -562,7 +563,7 @@ class EverGetChandelierExit(IStrategy):
             )
         )
 
-        conditions.append((dataframe['dir'] == -1) & (dataframe['dir'].shift(1) == 1))
+        #conditions.append((dataframe['dir'] == -1) & (dataframe['dir'].shift(1) == 1))
 
         if conditions:
             dataframe.loc[
