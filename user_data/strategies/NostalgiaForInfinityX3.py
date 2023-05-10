@@ -172,8 +172,8 @@ class NostalgiaForInfinityX3(IStrategy):
         "buy_condition_4_enable": True,
         "buy_condition_5_enable": True,
         "buy_condition_6_enable": True,
-        "buy_condition_7_enable": True,
-        "buy_condition_8_enable": True,
+        "buy_condition_7_enable": False,
+        "buy_condition_8_enable": False,
 
         "buy_condition_21_enable": True,
         "buy_condition_22_enable": True,
