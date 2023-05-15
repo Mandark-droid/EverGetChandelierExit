@@ -65,7 +65,7 @@ class NostalgiaForInfinityX3(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v13.0.28"
+        return "v13.0.29"
 
     # ROI table:
     minimal_roi = {
@@ -167,7 +167,11 @@ class NostalgiaForInfinityX3(IStrategy):
 
     #############################################################
     # Buy side configuration
-
+    atr_period = 22
+    atr_multiplier = 3.0
+    showLabels = True
+    useClose = True
+    highlightState = True
     buy_params = {
         # Enable/Disable conditions
         # -------------------------------------------------------
@@ -179,7 +183,7 @@ class NostalgiaForInfinityX3(IStrategy):
         "buy_condition_6_enable": True,
         "buy_condition_7_enable": True,
         "buy_condition_8_enable": True,
-
+        "buy_condition_9_enable": True,
         "buy_condition_21_enable": True,
         "buy_condition_22_enable": True,
 
@@ -1718,6 +1722,46 @@ class NostalgiaForInfinityX3(IStrategy):
 
         # Indicators
         # -----------------------------------------------------------------------------------------
+
+        # EverGet ChandilerExit
+        high = dataframe['high']  # Replace with your high data
+        low = dataframe['low']  # Replace with your low data
+        close = dataframe['close']  # Replace with your close data
+        # atr = ta.ATR(high, low, close, self.atr_period) * self.atr_multiplier
+        atr = ta.ATR(high, low, close, 22) * 3
+        longStop = (high.rolling(self.atr_period).max() if self.useClose else high.rolling(self.atr_period).apply(
+            lambda x: x[:-1].max())) - atr
+        longStopPrev = longStop.shift(1).fillna(longStop)
+        longStop = close.shift(1).where(close.shift(1) > longStopPrev, longStop)
+
+        shortStop = (low.rolling(self.atr_period).min() if self.useClose else low.rolling(self.atr_period).apply(
+            lambda x: x[:-1].min())) + atr
+        shortStopPrev = shortStop.shift(1).fillna(shortStop)
+        shortStop = close.shift(1).where(close.shift(1) < shortStopPrev, shortStop)
+
+        # dir = close.apply(lambda x: 1 if x > shortStopPrev.iloc[-1] else -1 if x < longStopPrev.iloc[-1] else dir[-1])
+        dataframe['dir'] = 1
+        dataframe.loc[dataframe['close'] <= longStopPrev, 'dir'] = -1
+        dataframe.loc[dataframe['close'] > shortStopPrev, 'dir'] = 1
+
+        longColor = 'green'
+        shortColor = 'red'
+
+        longStopPlot = longStop.where(dataframe['dir'] == 1, None)
+        buySignal = (dataframe['dir'] == 1) & (dataframe['dir'].shift(1) == -1)
+        buySignalPlot = longStop.where(buySignal, None)
+        buyLabel = pd.Series(['Buy' if x else '' for x in buySignal]).where(self.showLabels & buySignal, None).any()
+
+        shortStopPlot = shortStop.where(dataframe['dir'] == -1, None)
+        sellSignal = (dataframe['dir'] == -1) & (dataframe['dir'].shift(1) == 1)
+        sellSignalPlot = shortStop.where(sellSignal, None)
+        sellLabel = pd.Series(['Sell' if x else '' for x in sellSignal]).where(self.showLabels & sellSignal, None).any()
+
+        midPricePlot = close
+
+        longFillColor = longColor if self.highlightState and (dataframe['dir'] == 1).any() else None
+        shortFillColor = shortColor if self.highlightState and (dataframe['dir'] == -1).any() else None
+
         # RSI
         dataframe['rsi_3'] = ta.RSI(dataframe, timeperiod=3)
         dataframe['rsi_14'] = ta.RSI(dataframe, timeperiod=14)
@@ -5952,6 +5996,17 @@ class NostalgiaForInfinityX3(IStrategy):
                     item_buy_logic.append(dataframe['close'] < (dataframe['ema_16'] * 0.944))
                     item_buy_logic.append(dataframe['ewo_50_200'] < -4.0)
                     item_buy_logic.append(dataframe['rsi_14'] < 30.0)
+
+                # Condition #7 Normal mode.
+                if index == 9:
+                    # Logic
+                    item_buy_logic.append(dataframe['dir'] == 1)
+                    item_buy_logic.append(dataframe['dir'].shift(1) == -1)
+                    item_buy_logic.append(dataframe['close'] > (dataframe['bb20_2_low']))
+                    item_buy_logic.append(dataframe['close'] > (dataframe['ema_26']))
+                    item_buy_logic.append(dataframe['close'] > (dataframe['sma_50']))
+                    item_buy_logic.append(dataframe['rsi_14'] > 28)
+                    item_buy_logic.append(dataframe['rsi_14'] < 70)
 
                 # Condition #21 - Pump mode bull.
                 if index == 21:
