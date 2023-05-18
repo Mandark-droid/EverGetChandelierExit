@@ -1667,7 +1667,7 @@ class NostalgiaForInfinityX3(IStrategy):
 
         # SMA
         informative_1h['sma_12'] = ta.SMA(informative_1h, timeperiod=12)
-        informative_1h['sma_26'] = ta.SMA(informative_1h, timeperiod=21)
+        informative_1h['sma_21'] = ta.SMA(informative_1h, timeperiod=21)
         informative_1h['sma_26'] = ta.SMA(informative_1h, timeperiod=26)
         informative_1h['sma_50'] = ta.SMA(informative_1h, timeperiod=50)
         informative_1h['sma_100'] = ta.SMA(informative_1h, timeperiod=100)
