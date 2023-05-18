@@ -1599,11 +1599,16 @@ class NostalgiaForInfinityX3(IStrategy):
         # Calculate the Linear Regression
         lsma = pta.linreg(informative_1h['close'], length=self.zlsma_length, offset=self.zlsma_offset)
         lsma2 = pta.linreg(lsma, length=self.zlsma_length, offset=self.zlsma_offset)
-
         # Calculate the Zero Lag SMA
-        eq = lsma - lsma2
-        zlsma = lsma + eq
-        informative_1h['zlsma'] = zlsma
+        if lsma is not None and lsma2 is not None:
+            eq = lsma - lsma2
+            zlsma = lsma + eq
+            informative_1h['zlsma'] = zlsma
+        else:
+            eq = 0
+            zlsma = 0
+            informative_1h['zlsma'] = zlsma
+
 
         # EverGet ChandilerExit
         high = informative_1h['high']  # Replace with your high data
@@ -6234,7 +6239,7 @@ class NostalgiaForInfinityX3(IStrategy):
                     #item_buy_logic.append(dataframe['close'] > (dataframe['ema_21_1h']))
                     #item_buy_logic.append(dataframe['close'] > (dataframe['sma_21_1h']))
                     item_buy_logic.append(dataframe['ema_26'] > (dataframe['ema_12']))
-                    item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
+                    #item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
 
 
                 # Condition #21 - Pump mode bull.
