@@ -65,7 +65,7 @@ class NostalgiaForInfinityX3(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v13.0.45"
+        return "v13.0.46"
 
     # ROI table:
     minimal_roi = {
@@ -1330,6 +1330,11 @@ class NostalgiaForInfinityX3(IStrategy):
                                 and (last_candle['close_max_48'] < (last_candle['close'] * 1.16))
                                 and (last_candle['btc_pct_close_max_72_5m'] < 0.04)
                                 and (last_candle['btc_pct_close_max_24_5m'] < 0.03)
+                            )
+                            and
+                            (
+                                (current_time - timedelta(minutes=30) > filled_entries[-1].order_filled_utc)
+                                or (slice_profit_entry < -0.01)
                             )
                             and
                             (
@@ -7852,7 +7857,7 @@ class NostalgiaForInfinityX3(IStrategy):
                     #item_buy_logic.append(dataframe['close'] > (dataframe['ema_21_1h']))
                     #item_buy_logic.append(dataframe['close'] > (dataframe['sma_21_1h']))
                     item_buy_logic.append(dataframe['ema_26'] > (dataframe['ema_12']))
-                    #item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
+                    item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
 
 
                 # Condition #41 - Quick mode bull.
