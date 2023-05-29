@@ -146,8 +146,8 @@ class NostalgiaForInfinityX3(IStrategy):
     stake_grinding_mode_multiplier_alt_1 = 1.0
     stake_grinding_mode_multiplier_alt_2 = 1.0
     # Grinding stop thresholds
-    grinding_stop_init = -0.05
-    grinding_stop_grinds = -0.05
+    grinding_stop_init = -0.06
+    grinding_stop_grinds = -0.06
     # Grinding take profit threshold
     grinding_profit_threshold = 0.024
     # Grinding stakes
