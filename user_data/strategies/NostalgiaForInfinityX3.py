@@ -65,7 +65,7 @@ class NostalgiaForInfinityX3(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v13.0.79"
+        return "v13.0.83"
 
     # ROI table:
     minimal_roi = {
@@ -146,8 +146,8 @@ class NostalgiaForInfinityX3(IStrategy):
     stake_grinding_mode_multiplier_alt_1 = 1.0
     stake_grinding_mode_multiplier_alt_2 = 1.0
     # Grinding stop thresholds
-    grinding_stop_init = -0.06
-    grinding_stop_grinds = -0.06
+    grinding_stop_init = -0.08
+    grinding_stop_grinds = -0.08
     # Grinding take profit threshold
     grinding_profit_threshold = 0.024
     # Grinding stakes
@@ -1348,9 +1348,10 @@ class NostalgiaForInfinityX3(IStrategy):
                                 (
                                     (last_candle['rsi_14'] < 36.0)
                                     and (last_candle['ema_26'] > last_candle['ema_12'])
-                                    and ((last_candle['ema_26'] - last_candle['ema_12']) > (last_candle['open'] * 0.005))
+                                    and ((last_candle['ema_26'] - last_candle['ema_12']) > (last_candle['open'] * 0.016))
                                     and ((previous_candle['ema_26'] - previous_candle['ema_12']) > (last_candle['open'] / 100.0))
-                                    and (last_candle['close'] > last_candle['sar_1h'])
+                                    and (last_candle['rsi_3_1h'] > 30.0)
+                                    and (last_candle['rsi_3_4h'] > 30.0)
                                 )
                                 or
                                 (
@@ -1370,6 +1371,7 @@ class NostalgiaForInfinityX3(IStrategy):
                                     and (last_candle['rsi_3'] > 5.0)
                                     and (last_candle['close'] < (last_candle['bb20_2_low'] * 0.996))
                                     and (last_candle['rsi_3_15m'] > 5.0)
+                                    and (last_candle['cti_20_1h'] < 0.5)
                                     and (last_candle['rsi_3_1h'] > 10.0)
                                     and (last_candle['rsi_3_4h'] > 25.0)
                                     and (last_candle['not_downtrend_1h'])
@@ -1387,18 +1389,17 @@ class NostalgiaForInfinityX3(IStrategy):
                                 )
                                 or
                                 (
-                                    (last_candle['rsi_14'] < 40.0)
+                                    (last_candle['rsi_14'] < 36.0)
                                     and (last_candle['rsi_3'] > 5.0)
                                     and (last_candle['cti_20'] > -0.5)
                                     and (previous_candle['cti_20'] < -0.5)
-                                    and (last_candle['rsi_3_15m'] > 10.0)
                                     and (last_candle['cti_20_1h'] < 0.8)
-                                    and (last_candle['rsi_3_1h'] > 30.0)
+                                    and (last_candle['rsi_3_1h'] > 10.0)
                                     and (last_candle['rsi_3_4h'] > 30.0)
                                 )
                                 or
                                 (
-                                    (last_candle['rsi_14'] < 32.0)
+                                    (last_candle['rsi_14'] < 30.0)
                                     and (last_candle['rsi_3'] > 5.0)
                                     and (last_candle['ema_12'] < last_candle['ema_26'])
                                     and (last_candle['rsi_3_15m'] > 10.0)
