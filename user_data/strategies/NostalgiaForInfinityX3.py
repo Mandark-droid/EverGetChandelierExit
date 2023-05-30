@@ -132,7 +132,7 @@ class NostalgiaForInfinityX3(IStrategy):
     # 10: enable Doom Bull, 11: enable Doom Bear, 12: enable u_e Bull, 13: enable u_e Bear.
     stop_thresholds = [-0.2, -0.2, -0.025, -0.025, 720, 720, 0.016, 0.016, 24.0, 24.0, False, False, True, True]
     # Based on the the first entry (regardless of rebuys)
-    stop_threshold = 0.5
+    stop_threshold = 0.7
 
     # Rebuy mode minimum number of free slots
     rebuy_mode_min_free_slots = 2
@@ -187,7 +187,7 @@ class NostalgiaForInfinityX3(IStrategy):
 
         "buy_condition_21_enable": True,
         "buy_condition_22_enable": True,
-        "buy_condition_40_enable": False,
+        "buy_condition_40_enable": True,
         "buy_condition_41_enable": True,
         "buy_condition_42_enable": True,
         "buy_condition_43_enable": True,
