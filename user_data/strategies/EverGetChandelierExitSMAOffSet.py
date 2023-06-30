@@ -5,10 +5,10 @@
 import numpy as np
 import pandas as pd
 # from matplotlib import pyplot as plt
-from pandas import DataFrame
+from pandas import DataFrame, Series
 from datetime import datetime
 from typing import Optional, Union
-# from freqtrade.strategy import (BooleanParameter, CategoricalParameter, DecimalParameter,
+#from freqtrade.strategy import (BooleanParameter, CategoricalParameter, DecimalParameter,
 #                                IntParameter, IStrategy, merge_informative_pair)
 from freqtrade.strategy import IStrategy, merge_informative_pair
 from sqlalchemy.ext.declarative import declarative_base
@@ -31,6 +31,8 @@ import technical.indicators as ftt
 import math
 import logging
 from functools import reduce
+import time
+log = logging.getLogger(__name__)
 
 
 def EWO(dataframe, ema_length=5, ema2_length=35):
@@ -76,7 +78,7 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v1.0.10"
+        return "v1.0.12"
 
     overbuy_factor = 1.295
 
@@ -106,7 +108,7 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
             buy_tag = trade.buy_tag
         buy_tags = buy_tag.split()
 
-        if current_profit <= -0.35:
+        if current_profit <= -0.15:
             return f'stop_loss ({buy_tag})'
 
         return None
@@ -243,10 +245,12 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
     # This attribute will be overridden if the config file contains "minimal_roi".
     minimal_roi = {
         "0": 0.03,
-        "10": 0.024,
-        "30": 0.016,
-        "40": 0.012,
-        "50": 0.0008
+        "10": 0.028,
+        "30": 0.025,
+        "40": 0.018,
+        "50": 0.015,
+        "60": 0.01,
+        "70": 0.005
     }
     # SMAOffset
     base_nb_candles_buy = IntParameter(
@@ -273,11 +277,11 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
     stoploss = -0.99
     use_custom_stoploss = False
 
-    # Trailing stop:
-    trailing_stop = False
-    trailing_stop_positive = 0.001
-    trailing_stop_positive_offset = 0.01
-    trailing_only_offset_is_reached = True
+    # Trailing stoploss
+    trailing_stop = True
+    trailing_only_offset_is_reached = False
+    trailing_stop_positive = 0.01
+    trailing_stop_positive_offset = 0.011  # Disabled / not configured
 
     # Sell signal
     use_exit_signal = True
@@ -359,22 +363,98 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
         }
 
     def informative_pairs(self):
-        """
-        Define additional, informative pair/interval combinations to be cached from the exchange.
-        These pair/interval combinations are non-tradeable, unless they are part
-        of the whitelist as well.
-        For more information, please consult the documentation
-        :return: List of tuples in the format (pair, interval)
-            Sample: return [("ETH/USDT", "5m"),
-                            ("BTC/USDT", "15m"),
-                            ]
-        """
+        # get access to all pairs available in whitelist.
         pairs = self.dp.current_whitelist()
-        informative_pairs = [(pair, self.informative_timeframe)
-                             for pair in pairs]
+        # Assign tf to each pair so they can be downloaded and cached for strategy.
+        informative_pairs = []
+        for info_timeframe in self.info_timeframes:
+            informative_pairs.extend([(pair, info_timeframe) for pair in pairs])
+
+        #if self.config['stake_currency'] in ['USDT','BUSD','USDC','DAI','TUSD','PAX','USD','EUR','GBP']:
+        #    btc_info_pair = f"BTC/{self.config['stake_currency']}"
+        #else:
+        #    btc_info_pair = "BTC/USDT"
+#
+ #       informative_pairs.extend([(btc_info_pair, btc_info_timeframe) for btc_info_timeframe in self.btc_info_timeframes])
 
         return informative_pairs
+        # Range midpoint acts as Support
 
+    def is_support(row_data) -> bool:
+        conditions = []
+        for row in range(len(row_data) - 1):
+            if row < len(row_data) // 2:
+                conditions.append(row_data[row] > row_data[row + 1])
+            else:
+                conditions.append(row_data[row] < row_data[row + 1])
+        result = reduce(lambda x, y: x & y, conditions)
+        return result
+
+        # Range midpoint acts as Resistance
+
+    def is_resistance(row_data) -> bool:
+        conditions = []
+        for row in range(len(row_data) - 1):
+            if row < len(row_data) // 2:
+                conditions.append(row_data[row] < row_data[row + 1])
+            else:
+                conditions.append(row_data[row] > row_data[row + 1])
+        result = reduce(lambda x, y: x & y, conditions)
+        return result
+
+        # Peak Percentage Change
+
+    def range_percent_change(self, dataframe: DataFrame, method, length: int) -> float:
+        """
+        Rolling Percentage Change Maximum across interval.
+
+        :param dataframe: DataFrame The original OHLC dataframe
+        :param method: High to Low / Open to Close
+        :param length: int The length to look back
+        """
+        if method == 'HL':
+            return (dataframe['high'].rolling(length).max() - dataframe['low'].rolling(length).min()) / dataframe[
+                'low'].rolling(length).min()
+        elif method == 'OC':
+            return (dataframe['open'].rolling(length).max() - dataframe['close'].rolling(length).min()) / dataframe[
+                'close'].rolling(length).min()
+        else:
+            raise ValueError(f"Method {method} not defined!")
+
+        # Williams %R
+
+    def williams_r(dataframe: DataFrame, period: int = 14) -> Series:
+        """Williams %R, or just %R, is a technical analysis oscillator showing the current closing price in relation to the high and low
+           of the past N days (for a given N). It was developed by a publisher and promoter of trading materials, Larry Williams.
+          Its purpose is to tell whether a stock or commodity market is trading near the high or the low, or somewhere in between,
+          of its recent trading range.
+          The oscillator is on a negative scale, from −100 (lowest) up to 0 (highest).
+        """
+
+        highest_high = dataframe["high"].rolling(center=False, window=period).max()
+        lowest_low = dataframe["low"].rolling(center=False, window=period).min()
+
+        WR = Series(
+            (highest_high - dataframe["close"]) / (highest_high - lowest_low),
+            name=f"{period} Williams %R",
+        )
+
+        return WR * -100
+
+    def williams_fractals(dataframe: pd.DataFrame, period: int = 2) -> tuple:
+        """Williams Fractals implementation
+
+        :param dataframe: OHLC data
+        :param period: number of lower (or higher) points on each side of a high (or low)
+        :return: tuple of boolean Series (bearish, bullish) where True marks a fractal pattern
+        """
+
+        window = 2 * period + 1
+
+        bears = dataframe['high'].rolling(window, center=True).apply(lambda x: x[period] == max(x), raw=True)
+        bulls = dataframe['low'].rolling(window, center=True).apply(lambda x: x[period] == min(x), raw=True)
+
+        return bears, bulls
     def get_informative_indicators(self, metadata: dict):
 
         dataframe = self.dp.get_pair_dataframe(
@@ -382,25 +462,250 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
 
         return []
 
-    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        """
-        Adds several different TA indicators to the given DataFrame
+        # Coin Pair Indicator Switch Case
+        # ---------------------------------------------------------------------------------------------
+    def informative_15m_indicators(self, metadata: dict, info_timeframe) -> DataFrame:
+        tik = time.perf_counter()
+        assert self.dp, "DataProvider is required for multiple timeframes."
 
-        Performance Note: For the best performance be frugal on the number of indicators
-        you are using. Let uncomment only the indicator you are using in your strategies
-        or your hyperopt configuration, otherwise you will waste your memory and CPU usage.
-        :param dataframe: Dataframe with data from the exchange
-        :param metadata: Additional information, like the currently traded pair
-        :return: a Dataframe with all mandatory indicators for the strategies
-        """
-        """
-        for val in self.base_nb_candles_buy.range:
-            dataframe[f'ma_buy_{val}'] = ta.EMA(dataframe, timeperiod=val)
+        # Get the informative pair
+        informative_15m = self.dp.get_pair_dataframe(pair=metadata['pair'], timeframe=info_timeframe)
 
-        # Calculate all ma_sell values
-        for val in self.base_nb_candles_sell.range:
-            dataframe[f'ma_sell_{val}'] = ta.EMA(dataframe, timeperiod=val)
-        """
+        # Indicators
+        # -----------------------------------------------------------------------------------------
+
+        # RSI
+        informative_15m['rsi_3'] = ta.RSI(informative_15m, timeperiod=3)
+        informative_15m['rsi_14'] = ta.RSI(informative_15m, timeperiod=14)
+
+        # EMA
+        informative_15m['ema_12'] = ta.EMA(informative_15m, timeperiod=12)
+        informative_15m['ema_26'] = ta.EMA(informative_15m, timeperiod=26)
+
+        # SMA
+        informative_15m['sma_200'] = ta.SMA(informative_15m, timeperiod=200)
+
+        # BB - 20 STD2
+        bollinger = qtpylib.bollinger_bands(qtpylib.typical_price(informative_15m), window=20, stds=2)
+        informative_15m['bb20_2_low'] = bollinger['lower']
+        informative_15m['bb20_2_mid'] = bollinger['mid']
+        informative_15m['bb20_2_upp'] = bollinger['upper']
+
+        # CTI
+        informative_15m['cti_20'] = pta.cti(informative_15m["close"], length=20)
+
+        # Downtrend check
+        informative_15m['not_downtrend'] = ((informative_15m['close'] > informative_15m['open']) | (informative_15m['close'].shift(1) > informative_15m['open'].shift(1)) | (informative_15m['close'].shift(2) > informative_15m['open'].shift(2)) | (informative_15m['rsi_14'] > 50.0) | (informative_15m['rsi_3'] > 25.0))
+
+        # Volume
+        informative_15m['volume_mean_factor_12'] = informative_15m['volume'] / informative_15m['volume'].rolling(12).mean()
+
+        # Performance logging
+        # -----------------------------------------------------------------------------------------
+        tok = time.perf_counter()
+        log.debug(f"[{metadata['pair']}] informative_15m_indicators took: {tok - tik:0.4f} seconds.")
+
+        return informative_15m
+
+    def informative_1h_indicators(self, metadata: dict, info_timeframe) -> DataFrame:
+        tik = time.perf_counter()
+        assert self.dp, "DataProvider is required for multiple timeframes."
+        # Get the informative pair
+        informative_1h = self.dp.get_pair_dataframe(pair=metadata['pair'], timeframe=info_timeframe)
+
+        # Indicators
+        # -----------------------------------------------------------------------------------------
+        # Calculate the Linear Regression
+        lsma = pta.linreg(informative_1h['close'], length=50, offset=0)
+        lsma2 = pta.linreg(lsma, length=50, offset=0)
+        # Calculate the Zero Lag SMA
+        if lsma is not None and lsma2 is not None:
+            eq = lsma - lsma2
+            zlsma = lsma + eq
+            informative_1h['zlsma'] = zlsma
+        else:
+            eq = 0
+            zlsma = 0
+            informative_1h['zlsma'] = zlsma
+
+        # EverGet ChandilerExit
+        high = informative_1h['high']  # Replace with your high data
+        low = informative_1h['low']  # Replace with your low data
+        close = informative_1h['close']  # Replace with your close data
+        # atr = ta.ATR(high, low, close, self.atr_period) * self.atr_multiplier
+        atr = ta.ATR(high, low, close, 22) * 3
+        longStop = (high.rolling(22).max() if True else high.rolling(22).apply(
+            lambda x: x[:-1].max())) - atr
+        longStopPrev = longStop.shift(1).fillna(longStop)
+        longStop = close.shift(1).where(close.shift(1) > longStopPrev, longStop)
+
+        shortStop = (low.rolling(22).min() if True else low.rolling(22).apply(
+            lambda x: x[:-1].min())) + atr
+        shortStopPrev = shortStop.shift(1).fillna(shortStop)
+        shortStop = close.shift(1).where(close.shift(1) < shortStopPrev, shortStop)
+
+        # dir = close.apply(lambda x: 1 if x > shortStopPrev.iloc[-1] else -1 if x < longStopPrev.iloc[-1] else dir[-1])
+        informative_1h['dir'] = 1
+        informative_1h.loc[informative_1h['close'] <= longStopPrev, 'dir'] = -1
+        informative_1h.loc[informative_1h['close'] > shortStopPrev, 'dir'] = 1
+
+        longColor = 'green'
+        shortColor = 'red'
+
+        longStopPlot = longStop.where(informative_1h['dir'] == 1, None)
+        buySignal = (informative_1h['dir'] == 1) & (informative_1h['dir'].shift(1) == -1)
+        buySignalPlot = longStop.where(buySignal, None)
+        buyLabel = pd.Series(['Buy' if x else '' for x in buySignal]).where(True & buySignal, None).any()
+
+        shortStopPlot = shortStop.where(informative_1h['dir'] == -1, None)
+        sellSignal = (informative_1h['dir'] == -1) & (informative_1h['dir'].shift(1) == 1)
+        sellSignalPlot = shortStop.where(sellSignal, None)
+        sellLabel = pd.Series(['Sell' if x else '' for x in sellSignal]).where(True & sellSignal, None).any()
+
+        midPricePlot = close
+
+        longFillColor = longColor if True and (informative_1h['dir'] == 1).any() else None
+        shortFillColor = shortColor if True and (informative_1h['dir'] == -1).any() else None
+
+        # RSI
+        informative_1h['rsi_3'] = ta.RSI(informative_1h, timeperiod=3)
+        informative_1h['rsi_14'] = ta.RSI(informative_1h, timeperiod=14)
+        informative_1h['rsi_25'] = ta.RSI(informative_1h, timeperiod=25)
+
+        # EMA
+        informative_1h['ema_12'] = ta.EMA(informative_1h, timeperiod=12)
+        informative_1h['ema_21'] = ta.EMA(informative_1h, timeperiod=21)
+        informative_1h['ema_26'] = ta.EMA(informative_1h, timeperiod=26)
+        informative_1h['ema_50'] = ta.EMA(informative_1h, timeperiod=50)
+        informative_1h['ema_100'] = ta.EMA(informative_1h, timeperiod=100)
+        informative_1h['ema_200'] = ta.EMA(informative_1h, timeperiod=200)
+
+        informative_1h['ema_200_dec_48'] = ((informative_1h['ema_200'].isnull()) | (
+                    informative_1h['ema_200'] <= informative_1h['ema_200'].shift(48)))
+
+        # SMA
+        informative_1h['sma_12'] = ta.SMA(informative_1h, timeperiod=12)
+        informative_1h['sma_21'] = ta.SMA(informative_1h, timeperiod=21)
+        informative_1h['sma_26'] = ta.SMA(informative_1h, timeperiod=26)
+        informative_1h['sma_50'] = ta.SMA(informative_1h, timeperiod=50)
+        informative_1h['sma_100'] = ta.SMA(informative_1h, timeperiod=100)
+        informative_1h['sma_200'] = ta.SMA(informative_1h, timeperiod=200)
+
+        # BB
+        bollinger = qtpylib.bollinger_bands(qtpylib.typical_price(informative_1h), window=20, stds=2)
+        informative_1h['bb20_2_low'] = bollinger['lower']
+        informative_1h['bb20_2_mid'] = bollinger['mid']
+        informative_1h['bb20_2_upp'] = bollinger['upper']
+
+        informative_1h['bb20_2_width'] = (
+                    (informative_1h['bb20_2_upp'] - informative_1h['bb20_2_low']) / informative_1h['bb20_2_mid'])
+
+        # Williams %R
+        #informative_1h['r_14'] = williams_r(informative_1h, period=14)
+        #informative_1h['r_96'] = williams_r(informative_1h, period=96)
+        #informative_1h['r_480'] = williams_r(informative_1h, period=480)
+
+        # CTI
+        informative_1h['cti_20'] = pta.cti(informative_1h["close"], length=20)
+        informative_1h['cti_40'] = pta.cti(informative_1h["close"], length=40)
+
+        # SAR
+        informative_1h['sar'] = ta.SAR(informative_1h)
+
+        # S/R
+      #  res_series = informative_1h['high'].rolling(window=5, center=True).apply(lambda row: is_resistance(row),
+      #                                                                           raw=True).shift(2)
+      #  sup_series = informative_1h['low'].rolling(window=5, center=True).apply(lambda row: is_support(row),
+      #                                                                          raw=True).shift(2)
+      #  informative_1h['res_level'] = Series(np.where(res_series,
+      #                                                np.where(informative_1h['close'] > informative_1h['open'],
+      #                                                         informative_1h['close'], informative_1h['open']),
+      #                                                float('NaN'))).ffill()
+      #  informative_1h['res_hlevel'] = Series(np.where(res_series, informative_1h['high'], float('NaN'))).ffill()
+      #  informative_1h['sup_level'] = Series(np.where(sup_series,
+      #                                                np.where(informative_1h['close'] < informative_1h['open'],
+      #                                                         informative_1h['close'], informative_1h['open']),
+      #                                                float('NaN'))).ffill()
+
+        # Pump protections
+        #informative_1h['hl_pct_change_48'] = range_percent_change(self, informative_1h, 'HL', 48)
+        #informative_1h['hl_pct_change_36'] = range_percent_change(self, informative_1h, 'HL', 36)
+        #informative_1h['hl_pct_change_24'] = range_percent_change(self, informative_1h, 'HL', 24)
+        #informative_1h['hl_pct_change_12'] = range_percent_change(self, informative_1h, 'HL', 12)
+        #informative_1h['hl_pct_change_6'] = range_percent_change(self, informative_1h, 'HL', 6)
+
+        # Downtrend checks
+        informative_1h['not_downtrend'] = (
+                    (informative_1h['close'] > informative_1h['close'].shift(2)) | (informative_1h['rsi_14'] > 50.0))
+
+        informative_1h['is_downtrend_3'] = ((informative_1h['close'] < informative_1h['open']) & (
+                    informative_1h['close'].shift(1) < informative_1h['open'].shift(1)) & (
+                                                        informative_1h['close'].shift(2) < informative_1h['open'].shift(
+                                                    2)))
+
+        informative_1h['is_downtrend_5'] = ((informative_1h['close'] < informative_1h['open']) & (
+                    informative_1h['close'].shift(1) < informative_1h['open'].shift(1)) & (
+                                                        informative_1h['close'].shift(2) < informative_1h['open'].shift(
+                                                    2)) & (
+                                                        informative_1h['close'].shift(3) < informative_1h['open'].shift(
+                                                    3)) & (
+                                                        informative_1h['close'].shift(4) < informative_1h['open'].shift(
+                                                    4)))
+
+        # Wicks
+        informative_1h['top_wick_pct'] = (
+                    (informative_1h['high'] - np.maximum(informative_1h['open'], informative_1h['close'])) / np.maximum(
+                informative_1h['open'], informative_1h['close']))
+
+        # Candle change
+        informative_1h['change_pct'] = (informative_1h['close'] - informative_1h['open']) / informative_1h['open']
+
+        # Max highs
+        informative_1h['high_max_3'] = informative_1h['high'].rolling(3).max()
+        informative_1h['high_max_6'] = informative_1h['high'].rolling(6).max()
+        informative_1h['high_max_12'] = informative_1h['high'].rolling(12).max()
+        informative_1h['high_max_24'] = informative_1h['high'].rolling(24).max()
+        informative_1h['high_max_36'] = informative_1h['high'].rolling(36).max()
+        informative_1h['high_max_48'] = informative_1h['high'].rolling(48).max()
+
+        # Volume
+        informative_1h['volume_mean_factor_12'] = informative_1h['volume'] / informative_1h['volume'].rolling(12).mean()
+
+        # Performance logging
+        # -----------------------------------------------------------------------------------------
+        tok = time.perf_counter()
+        log.debug(f"[{metadata['pair']}] informative_1h_indicators took: {tok - tik:0.4f} seconds.")
+
+        return informative_1h
+
+    def info_switcher(self, metadata: dict, info_timeframe) -> DataFrame:
+            if info_timeframe == '1h':
+                return self.informative_1h_indicators(metadata, info_timeframe)
+           # elif info_timeframe == '4h':
+           #     return self.informative_4h_indicators(metadata, info_timeframe)
+           # elif info_timeframe == '1d':
+           #     return self.informative_1d_indicators(metadata, info_timeframe)
+            elif info_timeframe == '15m':
+                return self.informative_15m_indicators(metadata, info_timeframe)
+            else:
+                raise RuntimeError(f"{info_timeframe} not supported as informative timeframe for USDT pairs.")
+
+    # Coin Pair Base Timeframe Indicators
+    # ---------------------------------------------------------------------------------------------
+    def base_tf_5m_indicators(self,  metadata: dict, dataframe: DataFrame) -> DataFrame:
+        tik = time.perf_counter()
+        # # Chart type
+        # # ------------------------------------
+        # # Heikin Ashi Strategy
+        heikinashi = qtpylib.heikinashi(dataframe)
+        # dataframe['ha_open'] = heikinashi['open']
+        dataframe['ha_close'] = heikinashi['close']
+        dataframe['ha_high'] = heikinashi['high']
+        dataframe['ha_low'] = heikinashi['low']
+        src = (dataframe['ha_high'] + dataframe['ha_low'])/2
+        # Indicators
+        # -----------------------------------------------------------------------------------------
+        # RSI
         if self.change_atr:
             dataframe['atr'] = ta.ATR(
                 dataframe, timeperiod=self.super_atr_period)
@@ -410,13 +715,13 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
 
             # Calculate Supertrend lines
         dataframe['up'] = dataframe['close'] - \
-            (self.super_atr_multiplier * dataframe['atr'])
+                          (self.super_atr_multiplier * dataframe['atr'])
         dataframe['up1'] = dataframe['up'].shift(1).fillna(dataframe['up'])
         dataframe['up'] = dataframe.apply(lambda x: max(x['up'], x['up1']) if x['close'] > x['up1'] else x['up'],
                                           axis=1)
 
         dataframe['dn'] = dataframe['close'] + \
-            (self.super_atr_multiplier * dataframe['atr'])
+                          (self.super_atr_multiplier * dataframe['atr'])
         dataframe['dn1'] = dataframe['dn'].shift(1).fillna(dataframe['dn'])
         dataframe['dn'] = dataframe.apply(lambda x: min(x['dn'], x['dn1']) if x['close'] < x['dn1'] else x['dn'],
                                           axis=1)
@@ -427,13 +732,14 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
         dataframe.loc[(dataframe['trend'] == -1) &
                       (dataframe['close'] > dataframe['dn1']), 'trend'] = 1
         dataframe.loc[(dataframe['trend'] == 1) & (
-            dataframe['close'] < dataframe['up1']), 'trend'] = -1
+                dataframe['close'] < dataframe['up1']), 'trend'] = -1
 
         # Elliot
         dataframe['EWO'] = EWO(dataframe, self.fast_ewo, self.slow_ewo)
 
         # RSI
         dataframe['rsi'] = ta.RSI(dataframe, timeperiod=14)
+        dataframe['rsi_25'] = ta.RSI(dataframe, timeperiod=25)
 
         # Check for 0 volume candles in the last day
         dataframe['missing_data'] = \
@@ -447,7 +753,7 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
         low = dataframe['low']  # Replace with your low data
         close = dataframe['close']  # Replace with your close data
         # atr = ta.ATR(high, low, close, self.atr_period) * self.atr_multiplier
-        atr = ta.ATR(high, low, close, 22) * 3
+        atr = ta.ATR(high, low, close, self.atr_period) * self.atr_multiplier
         longStop = (high.rolling(self.atr_period).max() if self.useClose else high.rolling(self.atr_period).apply(
             lambda x: x[:-1].max())) - atr
         longStopPrev = longStop.shift(1).fillna(longStop)
@@ -476,7 +782,7 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
 
         shortStopPlot = shortStop.where(dataframe['dir'] == -1, None)
         sellSignal = (dataframe['dir'] == -
-                      1) & (dataframe['dir'].shift(1) == 1)
+        1) & (dataframe['dir'].shift(1) == 1)
         sellSignalPlot = shortStop.where(sellSignal, None)
         sellLabel = pd.Series(['Sell' if x else '' for x in sellSignal]).where(
             self.showLabels & sellSignal, None).any()
@@ -484,9 +790,9 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
         midPricePlot = close
 
         longFillColor = longColor if self.highlightState and (
-            dataframe['dir'] == 1).any() else None
+                dataframe['dir'] == 1).any() else None
         shortFillColor = shortColor if self.highlightState and (
-            dataframe['dir'] == -1).any() else None
+                dataframe['dir'] == -1).any() else None
         # fill = lambda x, y, color: plt.fill_between(x.index, y, x, where=y < x, interpolate=True, color=color)
         # fig, ax = plt.subplots()
         # fill(midPricePlot, longStopPlot, longFillColor)
@@ -523,12 +829,12 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
         dataframe['bb_middleband'] = bollinger['mid']
         dataframe['bb_upperband'] = bollinger['upper']
         dataframe["bb_percent"] = (
-            (dataframe["close"] - dataframe["bb_lowerband"]) /
-            (dataframe["bb_upperband"] - dataframe["bb_lowerband"])
+                (dataframe["close"] - dataframe["bb_lowerband"]) /
+                (dataframe["bb_upperband"] - dataframe["bb_lowerband"])
         )
         dataframe["bb_width"] = (
-            (dataframe["bb_upperband"] - dataframe["bb_lowerband"]
-             ) / dataframe["bb_middleband"]
+                (dataframe["bb_upperband"] - dataframe["bb_lowerband"]
+                 ) / dataframe["bb_middleband"]
         )
 
         stoch_fast = ta.STOCHF(dataframe)
@@ -564,6 +870,60 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
         dataframe['sma30'] = ta.SMA(dataframe, timeperiod=30)
         dataframe['sma50'] = ta.SMA(dataframe, timeperiod=50)
         # dataframe['sma100'] = ta.SMA(dataframe, timeperiod=100)
+        # Parabolic SAR
+        dataframe['sar'] = ta.SAR(dataframe)
+
+        # Performance logging
+        # -----------------------------------------------------------------------------------------
+        tok = time.perf_counter()
+        log.debug(f"[{metadata['pair']}] base_tf_5m_indicators took: {tok - tik:0.4f} seconds.")
+        return dataframe
+
+    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        """
+        Adds several different TA indicators to the given DataFrame
+
+        Performance Note: For the best performance be frugal on the number of indicators
+        you are using. Let uncomment only the indicator you are using in your strategies
+        or your hyperopt configuration, otherwise you will waste your memory and CPU usage.
+        :param dataframe: Dataframe with data from the exchange
+        :param metadata: Additional information, like the currently traded pair
+        :return: a Dataframe with all mandatory indicators for the strategies
+        """
+        """
+        for val in self.base_nb_candles_buy.range:
+            dataframe[f'ma_buy_{val}'] = ta.EMA(dataframe, timeperiod=val)
+
+        # Calculate all ma_sell values
+        for val in self.base_nb_candles_sell.range:
+            dataframe[f'ma_sell_{val}'] = ta.EMA(dataframe, timeperiod=val)
+        """
+        tik = time.perf_counter()
+        '''
+          --> Indicators on informative timeframes
+          ___________________________________________________________________________________________
+          '''
+        for info_timeframe in self.info_timeframes:
+            info_indicators = self.info_switcher(metadata, info_timeframe)
+            dataframe = merge_informative_pair(dataframe, info_indicators, self.timeframe, info_timeframe, ffill=True)
+            # Customize what we drop - in case we need to maintain some informative timeframe ohlcv data
+            # Default drop all except base timeframe ohlcv data
+            drop_columns = {
+           #     '1d': [f"{s}_{info_timeframe}" for s in ['date', 'open', 'high', 'low', 'close', 'volume']],
+           #     '4h': [f"{s}_{info_timeframe}" for s in ['date', 'open', 'high', 'low', 'close', 'volume']],
+                '1h': [f"{s}_{info_timeframe}" for s in ['date', 'open', 'high', 'low', 'close', 'volume']],
+                '15m': [f"{s}_{info_timeframe}" for s in ['date', 'high', 'low', 'volume']]
+            }.get(info_timeframe, [f"{s}_{info_timeframe}" for s in ['date', 'open', 'high', 'low', 'close', 'volume']])
+            dataframe.drop(columns=dataframe.columns.intersection(drop_columns), inplace=True)
+
+        '''
+        --> The indicators for the base timeframe  (5m)
+        ___________________________________________________________________________________________
+        '''
+        dataframe = self.base_tf_5m_indicators(metadata, dataframe)
+
+        tok = time.perf_counter()
+        log.debug(f"[{metadata['pair']}] Populate indicators took a total of: {tok - tik:0.4f} seconds.")
 
         return dataframe
 
@@ -602,13 +962,34 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
                     )
                     # Buy 3: Chandelier exit
                 if index == 3:
-                    item_buy_logic.append((dataframe['dir'] == 1)
-                                          & (dataframe['dir'].shift(1) == -1)
-                                           & (dataframe['rsi_25'] > 30)
-                                           & (dataframe['rsi_25'] < 70)
-                                           & (dataframe['close'] > dataframe['zlsma'])
+                    ## Protections
+                    item_buy_logic.append(dataframe['cti_20_1h'] < 0.8)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] < 80.0)
+                    item_buy_logic.append(dataframe['high_max_24_1h'] < (dataframe['close'] * 1.5))
+                    #item_buy_logic.append(dataframe['hl_pct_change_6_1h'] < 0.4)
+                    #item_buy_logic.append(dataframe['hl_pct_change_12_1h'] < 0.5)
+                    #item_buy_logic.append(dataframe['hl_pct_change_24_1h'] < 0.75)
+                    #item_buy_logic.append(dataframe['hl_pct_change_48_1h'] < 0.9)
+                    item_buy_logic.append((dataframe['cti_20_15m'] < -0.5)
+                                          | (dataframe['rsi_3_15m'] > 25.0)
+                                          | (dataframe['rsi_14_15m'] < 30.0)
+                                          | (dataframe['cti_20_1h'] < 0.5)
+                                          | (dataframe['ema_200_1h'] > dataframe['ema_200_1h'].shift(96)))
+                    item_buy_logic.append((dataframe['cti_20_15m'] < -0.8)
+                                          | (dataframe['rsi_14_15m'] < 30.0)
+                                          | (dataframe['cti_20_1h'] < 0.5)
+                                          | (dataframe['ema_200_1h'] > dataframe['ema_200_1h'].shift(96)))
+
+                    ## Logic
+                    item_buy_logic.append((dataframe['dir_1h'] == 1)
+                                          & (dataframe['dir_1h'].shift(1) == -1)
+                                           & (dataframe['rsi_25_1h'] > 30)
+                                           & (dataframe['rsi_25_1h'] < 70)
+                                           & (dataframe['close'] > dataframe['zlsma_1h'])
                                            & (dataframe['ema26'] > (dataframe['ema12']))
-                                           & (dataframe['ema26'].shift() - dataframe['ema12'].shift()) > (dataframe['open'] / 100)
+                                           #& (dataframe['ema26'].shift() - dataframe['ema12'].shift()) > (dataframe['open'] / 100)
+                                           & (dataframe['close'] > dataframe['close'].shift())  # Current close is higher than previous close
+                                           & (dataframe['sar'] < dataframe['low'])  # SAR is below the low price
                                           )
                     # Buy 4: SuperTrend
                 if index == 4:
@@ -616,7 +997,10 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
                                           & (dataframe['rsi_25'] > 24)
                                           & (dataframe['rsi_25'] < 70)
                                           & (dataframe['close'] > dataframe['zlsma'])
-                                          & (dataframe['ema21'] > (dataframe['ema7'])))
+                                          & (dataframe['ema21'] > (dataframe['ema7']))
+                                          & (dataframe['close'] > dataframe['close'].shift())  # Current close is higher than previous close
+                                          & (dataframe['sar'] < dataframe['low'])  # SAR is below the low price
+                                          )
 
                 item_buy_logic.append(dataframe['volume'] > 0)
                 item_buy = reduce(lambda x, y: x & y, item_buy_logic)
@@ -675,6 +1059,9 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
                                 dataframe[
                                     f'ma_sell_{self.base_nb_candles_sell.value}'] * self.high_offset.value)) &
                             (dataframe['volume'] > 0)
+                            & (dataframe['close'] < dataframe[
+                            'close'].shift()) &  # Current close is lower than previous close
+                            (dataframe['sar'] < dataframe['high'])  # SAR is below the high price
                         )
                     )
                     # Sell 2: SMAOffSet
@@ -685,17 +1072,27 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
                                 dataframe[
                                     f'ma_sell_{self.base_nb_candles_sell.value}'] * self.low_offset.value)) &
                             (dataframe['volume'] > 0)
+                            & (dataframe['close'] < dataframe[
+                            'close'].shift()) &  # Current close is lower than previous close
+                            (dataframe['sar'] < dataframe['high'])  # SAR is below the high price
                         )
                     )
 
                 # Sell 3: Chandelier Exit
                 if index == 3:
                     item_sell_logic.append(
-                        (dataframe['dir'] == -1) & (dataframe['dir'].shift(1) == 1))
+                        ((dataframe['dir_1h'] == -1) & (dataframe['dir_1h'].shift(1) == 1))
+                        & (dataframe['close'] < dataframe['close'].shift()) &  # Current close is lower than previous close
+                        (dataframe['sar'] < dataframe['high'])  # SAR is below the high price
+                    )
                     # Sell 4: SuperTrend
                 if index == 4:
                     item_sell_logic.append(
-                        (dataframe['trend'] == -1) & (dataframe['trend'].shift(1) == 1))
+                        ((dataframe['trend'] == -1) & (dataframe['trend'].shift(1) == 1))
+                        & (dataframe['close'] < dataframe[
+                            'close'].shift()) &  # Current close is lower than previous close
+                        (dataframe['sar'] < dataframe['high'])  # SAR is below the high price
+                    )
 
                 item_sell_logic.append(dataframe['volume'] > 0)
                 item_sell = reduce(lambda x, y: x & y, item_sell_logic)
@@ -705,7 +1102,6 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
         if conditions:
             dataframe.loc[:, 'exit_long'] = reduce(
                 lambda x, y: x | y, conditions)
-
         # Uncomment to use shorts (Only used in futures/margin mode. Check the documentation for more info)
         """
         dataframe.loc[
@@ -716,3 +1112,10 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
             'exit_short'] = 1
         """
         return dataframe
+    def save_to_csv(self, dataframe: DataFrame) -> None:
+        dataframe.to_csv('output.csv', index=False)
+
+    def on_postback(self, dataframe: DataFrame) -> None:
+        # Save the final DataFrame to a CSV file after backtesting or live trading
+        self.save_to_csv(dataframe)
+
