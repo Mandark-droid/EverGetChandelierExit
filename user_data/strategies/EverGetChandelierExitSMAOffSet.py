@@ -78,7 +78,7 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v1.0.11"
+        return "v1.0.12"
 
     overbuy_factor = 1.295
 
@@ -225,7 +225,7 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
         "sell_condition_1_enable": True,
         "sell_condition_2_enable": True,
         "sell_condition_3_enable": False,
-        "sell_condition_4_enable": True
+        "sell_condition_4_enable": False
     }
     # Sell hyperspace params:
     sell_params = {
@@ -714,25 +714,25 @@ class EverGetChandelierExitSMAOffSet(IStrategy):
                 dataframe, timeperiod=self.super_atr_period)
 
             # Calculate Supertrend lines
-        dataframe['up'] = src - \
+        dataframe['up'] = dataframe['close'] - \
                           (self.super_atr_multiplier * dataframe['atr'])
         dataframe['up1'] = dataframe['up'].shift(1).fillna(dataframe['up'])
-        dataframe['up'] = dataframe.apply(lambda x: max(x['up'], x['up1']) if x['ha_close'] > x['up1'] else x['up'],
+        dataframe['up'] = dataframe.apply(lambda x: max(x['up'], x['up1']) if x['close'] > x['up1'] else x['up'],
                                           axis=1)
 
-        dataframe['dn'] = src + \
+        dataframe['dn'] = dataframe['close'] + \
                           (self.super_atr_multiplier * dataframe['atr'])
         dataframe['dn1'] = dataframe['dn'].shift(1).fillna(dataframe['dn'])
-        dataframe['dn'] = dataframe.apply(lambda x: min(x['dn'], x['dn1']) if x['ha_close'] < x['dn1'] else x['dn'],
+        dataframe['dn'] = dataframe.apply(lambda x: min(x['dn'], x['dn1']) if x['close'] < x['dn1'] else x['dn'],
                                           axis=1)
 
         # Calculate trend
         dataframe['trend'] = 1
         dataframe['trend'] = dataframe['trend'].fillna(method='ffill')
         dataframe.loc[(dataframe['trend'] == -1) &
-                      (dataframe['ha_close'] > dataframe['dn1']), 'trend'] = 1
+                      (dataframe['close'] > dataframe['dn1']), 'trend'] = 1
         dataframe.loc[(dataframe['trend'] == 1) & (
-                dataframe['ha_close'] < dataframe['up1']), 'trend'] = -1
+                dataframe['close'] < dataframe['up1']), 'trend'] = -1
 
         # Elliot
         dataframe['EWO'] = EWO(dataframe, self.fast_ewo, self.slow_ewo)
